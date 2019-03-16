@@ -18,7 +18,7 @@ object BatchLoadUsingIndexTable extends LazyLogging{
     spark.sqlContext.setConf("spark.sql.hive.manageFilesourcePartitions","false")
 
     val tableName="db_gold.myTable"
-    val bucketLocation = "gs://self-staging-bucket/inputdata/sampleFile.csv"
+    val bucketLocation = "gs://self-staging-bucket/inputdata/*"
     val tableLocation = "gs://self-staging-bucket/outputdata"
     val format = "csv"
     historyLoad(spark,bucketLocation,tableLocation,tableLocation,tableName)
@@ -35,15 +35,21 @@ object BatchLoadUsingIndexTable extends LazyLogging{
     logger.info("history load has started :- ")
 
     import org.apache.spark.sql.functions._
+
     val readDataFromBucket = spark.read.format(dataFormat).option("inferschema","true").option("header","true").csv(bucketLocation)
     createHiveTable(spark,tableName,tableLocation,dataFormat,readDataFromBucket)
     createIndexTable(spark,"db_gold.index",tableLocation)
+
     val dataFrameWithVersion = readDataFromBucket.withColumn("version",lit(getVersionNumber(spark,"db_gold.index")))
     dataFrameWithVersion.write.mode(SaveMode.Append).insertInto(tableName)
-    val changeDataForIndexTable = dataFrameWithVersion.selectExpr("id","version").withColumn("run_id",lit(getRunId(spark,"db_gold.index","next")))
+
+    val changeDataForIndexTable = dataFrameWithVersion.selectExpr("id","version").withColumn("run_id",lit(getRunId(spark,"db_gold.index","next").toString))
     val  latestDataFromIndexTable = getLatestPartitionDatafromIndex(spark,"db_gold.index")
-    val runId = getRunId(spark,"db_gold.index","max")
+    val runId = getRunId(spark,"db_gold.index","next").toString
     val newIndexData = generateNewDataForIndexTable(spark,changeDataForIndexTable,latestDataFromIndexTable).withColumn("run_id",lit(runId))
+    changeDataForIndexTable.show()
+    latestDataFromIndexTable.show()
+    newIndexData.show()
     newIndexData.write.mode(SaveMode.Append).insertInto("db_gold.index")
     //dataFrameWithVersion.selectExpr("id","version").write.mode(SaveMode.Append).insertInto("db_gold.index")
   }
@@ -86,17 +92,17 @@ def getVersionNumber(spark:SparkSession,indexTableName:String):Int={
   def getRunId(spark:SparkSession,indexTableName:String,typeOfRunId:String):Int={
     logger.info("Fetching runId from index table")
     val runIdDataFrame = spark.sql(s"select coalesce(max(run_id),0) as run_id from ${indexTableName}")
-    val maxRunId = runIdDataFrame.select("run_id").collect().map(_.getInt(0))
+    val maxRunId = runIdDataFrame.select("run_id").collect().map(_.getString(0))
     if (typeOfRunId.equalsIgnoreCase("next"))
-    maxRunId(0)+1
-    else maxRunId(0)
+    maxRunId(0).toInt+1
+    else maxRunId(0).toInt
   }
 
   //create index table.
 def createIndexTable(spark:SparkSession,indexTableName:String,tableLocation:String)={
   logger.info("Creating index table :- ")
   val indexTableLocation = tableLocation.concat("/indexTable")
-  spark.sql(s"CREATE EXTERNAL TABLE IF NOT EXISTS ${indexTableName} ( id int,version int) PARTITIONED BY (run_id int) LOCATION '${indexTableLocation}' ")
+  spark.sql(s"CREATE EXTERNAL TABLE IF NOT EXISTS ${indexTableName} ( id int,version int) PARTITIONED BY (run_id string) LOCATION '${indexTableLocation}' ")
 }
 
   /**
@@ -104,7 +110,7 @@ def createIndexTable(spark:SparkSession,indexTableName:String,tableLocation:Stri
     */
   def getLatestPartitionDatafromIndex(spark:SparkSession,indexTableName:String)={
     logger.info("Fetching latest-partition data from index-table")
-    val maxRunId = getRunId(spark,indexTableName,"max")
+    val maxRunId = getRunId(spark,indexTableName,"max").toString
     spark.table(indexTableName).where(s"run_id==${maxRunId}")
   //  spark.sql(s"select * from ${indexTableName} where run_id=${maxRunId}")
 

@@ -1,4 +1,6 @@
 *.iml
 *.log
 target
-idea
+.idea
+dependency-reduced-pom.xml
+metastore_db/
