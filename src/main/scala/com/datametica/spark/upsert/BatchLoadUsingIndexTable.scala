@@ -1,11 +1,17 @@
 package com.datametica.spark.upsert
 
-import com.typesafe.scalalogging.slf4j.LazyLogging
+import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.module.scala.DefaultScalaModule
+import com.fasterxml.jackson.module.scala.experimental.ScalaObjectMapper
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.{DataFrame, SaveMode, SparkSession}
 import org.apache.spark.sql.functions._
+import org.json4s.jackson.Json
 
-object BatchLoadUsingIndexTable extends LazyLogging{
+import scala.io.Source
+import scala.util.parsing.json.JSON
+
+object BatchLoadUsingIndexTable{
 
   def main(args: Array[String]): Unit = {
     System.setProperty("hadoop.home.dir", "C:\\winutils")
@@ -25,21 +31,18 @@ object BatchLoadUsingIndexTable extends LazyLogging{
   }
   def getSparkSession(): SparkSession = {
     SparkSession.builder().appName("UsertUsingIndexTable")
-      .config("spark.master", "local")
       .enableHiveSupport().getOrCreate()
 
   }
 
   def historyLoad(spark:SparkSession,bucketLocation:String,dataFormat:String,tableLocation:String,tableName:String)={
 
-    logger.info("history load has started :- ")
-
     import org.apache.spark.sql.functions._
 
     val readDataFromBucket = spark.read.format(dataFormat).option("inferschema","true").option("header","true").csv(bucketLocation)
-    createHiveTable(spark,tableName,tableLocation,dataFormat,readDataFromBucket)
-    createIndexTable(spark,"db_gold.index",tableLocation)
-
+    //createHiveTable(spark,tableName,tableLocation,dataFormat,readDataFromBucket)
+   // createIndexTable(spark,"db_gold.index",tableLocation)
+    readSchemaAndCreateTable(spark,"db_gold.index",tableName,tableLocation,"schema.json","tsmt","id")
     val dataFrameWithVersion = readDataFromBucket.withColumn("version",lit(getVersionNumber(spark,"db_gold.index")))
     dataFrameWithVersion.write.mode(SaveMode.Append).insertInto(tableName)
 
@@ -54,14 +57,20 @@ object BatchLoadUsingIndexTable extends LazyLogging{
     //dataFrameWithVersion.selectExpr("id","version").write.mode(SaveMode.Append).insertInto("db_gold.index")
   }
 
-  def createHiveTable(spark:SparkSession,tableName:String,tableLocation:String,format:String,dataFrame:DataFrame)={
-    logger.info("Creating Hive Table --- ")
-    spark.sql(createTableSyntax(format,tableName,tableLocation,createSchemaForHiveTable(dataFrame)))
-  }
+  def createHiveTable(spark:SparkSession,tableName:String,tableLocation:String,
+                      tableType:String,schema:String,partCol:String)={
 
-  def createTableSyntax(format:String,tableName:String,tableLocation:String,schema:String):String={
     val baseTableLocation = tableLocation.concat("/baseTable")
-    return s"CREATE EXTERNAL TABLE IF NOT EXISTS ${tableName} ( ${schema}) PARTITIONED BY (tmst String,version int) STORED AS PARQUET LOCATION '${baseTableLocation}'"
+    val indexTableLocation = tableLocation.concat("/indexTable")
+
+    if (tableType.equalsIgnoreCase("base"))
+      spark.sql(s"CREATE EXTERNAL TABLE IF NOT EXISTS ${tableName} (${schema}) PARTITIONED BY (${partCol},version int) " +
+        s"STORED AS PARQUET LOCATION '${baseTableLocation}'")
+
+    if (tableType.equalsIgnoreCase("index"))
+    spark.sql(s"CREATE EXTERNAL TABLE IF NOT EXISTS ${tableName} ( ${schema},version int) " +
+      s"PARTITIONED BY (run_id string) LOCATION '${indexTableLocation}' ")
+
   }
 
   def createSchemaForHiveTable(dataFrame:DataFrame):String={
@@ -90,7 +99,6 @@ def getVersionNumber(spark:SparkSession,indexTableName:String):Int={
     * @return
     */
   def getRunId(spark:SparkSession,indexTableName:String,typeOfRunId:String):Int={
-    logger.info("Fetching runId from index table")
     val runIdDataFrame = spark.sql(s"select coalesce(max(run_id),0) as run_id from ${indexTableName}")
     val maxRunId = runIdDataFrame.select("run_id").collect().map(_.getString(0))
     if (typeOfRunId.equalsIgnoreCase("next"))
@@ -99,17 +107,15 @@ def getVersionNumber(spark:SparkSession,indexTableName:String):Int={
   }
 
   //create index table.
-def createIndexTable(spark:SparkSession,indexTableName:String,tableLocation:String)={
-  logger.info("Creating index table :- ")
+def createIndexTable(spark:SparkSession,indexTableName:String,tableLocation:String,schema:String)={
   val indexTableLocation = tableLocation.concat("/indexTable")
-  spark.sql(s"CREATE EXTERNAL TABLE IF NOT EXISTS ${indexTableName} ( id int,version int) PARTITIONED BY (run_id string) LOCATION '${indexTableLocation}' ")
+  spark.sql(s"CREATE EXTERNAL TABLE IF NOT EXISTS ${indexTableName} ( ${schema},version int) PARTITIONED BY (run_id string) LOCATION '${indexTableLocation}' ")
 }
 
   /**
     * get all the data of latest partitions from index table.
     */
   def getLatestPartitionDatafromIndex(spark:SparkSession,indexTableName:String)={
-    logger.info("Fetching latest-partition data from index-table")
     val maxRunId = getRunId(spark,indexTableName,"max").toString
     spark.table(indexTableName).where(s"run_id==${maxRunId}")
   //  spark.sql(s"select * from ${indexTableName} where run_id=${maxRunId}")
@@ -117,11 +123,42 @@ def createIndexTable(spark:SparkSession,indexTableName:String,tableLocation:Stri
   }
 
   def generateNewDataForIndexTable(spark:SparkSession,newSetOfData:DataFrame,latestDataFromIndexTable:DataFrame)={
-    logger.info("Final data for index-table")
     val unionOfDataFrame = newSetOfData.union(latestDataFromIndexTable)
    import spark.implicits._
     val windowSpec = Window.partitionBy("id").orderBy('run_id desc)
     unionOfDataFrame.withColumn("row_number",row_number().over(windowSpec)).filter("row_number==1").drop("row_number")
    // spark.sql("select * from (select id,version,run_id,row_number() over(partition by id order by run_id) as rn from tempIndexTable) a where a.rn=1")
   }
+
+  def readSchemaAndCreateTable(spark:SparkSession,indexTableName:String,baseTableName:String,tableLocation:String,
+                               schemaFilePath:String,partitionColumn:String,primaryKeys:String)={
+
+   var baseTableSchema = ""
+    var indexTableSchema = ""
+    var partCol = ""
+    for ((nameOfCol,typeOfcol) <- parsingJson(schemaFilePath)) {
+      if (!nameOfCol.equalsIgnoreCase(partitionColumn)) baseTableSchema+=nameOfCol+" "+typeOfcol+","
+      else partCol+=nameOfCol+" "+typeOfcol
+      if (primaryKeys.contains(nameOfCol)) indexTableSchema+=nameOfCol+" "+typeOfcol+","
+    }
+
+    //creating Base table.
+    createHiveTable(spark,baseTableName,tableLocation,"base",baseTableSchema,partCol)
+    //creating index table
+    createHiveTable(spark,indexTableName,tableLocation,"index",indexTableSchema,"run_id int")
+  }
+
+  /**
+    * parsingJson function will parse the json string and return a map of key and value.
+    * @param schemaFilePath -- schema file path.
+    * @return
+    */
+  def parsingJson(schemaFilePath:String)={
+    val json = Source.fromFile(schemaFilePath)
+    JSON.parseFull("")
+    val mapper = new ObjectMapper() with ScalaObjectMapper
+    mapper.registerModule(DefaultScalaModule)
+    mapper.readValue[Map[String, Object]](json.reader())
+  }
+
 }
