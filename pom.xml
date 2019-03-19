@@ -102,7 +102,7 @@
                     <target>1.8</target>
                 </configuration>
             </plugin>
-            <plugin>
+           <!-- <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-shade-plugin</artifactId>
                 <version>3.2.1</version>
@@ -124,11 +124,11 @@
                                     </excludes>
                                 </filter>
                             </filters>
-                            <!-- Additional configuration. -->
+                            &lt;!&ndash; Additional configuration. &ndash;&gt;
                         </configuration>
                     </execution>
                 </executions>
-            </plugin>
+            </plugin>-->
         </plugins>
     </build>
 
