@@ -22,7 +22,7 @@ object UpsertUsingIndexTable{
     */
   def loadData(spark:SparkSession, bucketLocation:String, dataFormat:String, tableLocation:String,
                tableName:String, schemaFilePath:String, partitionCol:String, key:String,
-               versionColName:String, indexTableName:String)={
+               versionColName:String, indexTableName:String,numberOfPartitions:Int)={
 
     import org.apache.spark.sql.functions._
 
@@ -32,7 +32,7 @@ object UpsertUsingIndexTable{
       .schema(
         Schema.createSchema(spark,schemaFilePath)
       ).csv(bucketLocation)
-      .repartition(1)
+      .repartition(numberOfPartitions)
 
     Schema.readSchemaAndCreateTable(spark,indexTableName,tableName,tableLocation,schemaFilePath,
       partitionCol,key,readDataFromBucket,versionColName)
@@ -53,7 +53,7 @@ object UpsertUsingIndexTable{
       )
 
     val  latestDataFromIndexTable = TableQuery.getLatestPartitionDataFromIndex(spark,indexTableName)
-        .repartition(1)
+        .repartition(numberOfPartitions)
 
     val runId = TableQuery.getRunId(spark,indexTableName,"next").toString
 
@@ -63,7 +63,7 @@ object UpsertUsingIndexTable{
       latestDataFromIndexTable,
       key
     ).withColumn("run_id",lit(runId)
-    )
+    ).repartition(numberOfPartitions)
 
     newIndexData.write.mode(SaveMode.Append).insertInto(indexTableName)
 

@@ -14,10 +14,11 @@ object MainClass {
     val tableLocation = args(5)
     val inputFileLocation = args(6)
     val schemaFilePath = args(7)
+    val numberOfPartitions = args(8).toInt
     val spark = getSparkSession()
 
     UpsertUsingIndexTable.loadData(spark,inputFileLocation,"csv", tableLocation,
-      baseTableName,schemaFilePath,partitionCol,primaryKey,versionColName,indexTableName)
+      baseTableName,schemaFilePath,partitionCol,primaryKey,versionColName,indexTableName,numberOfPartitions)
   }
 
   /**
