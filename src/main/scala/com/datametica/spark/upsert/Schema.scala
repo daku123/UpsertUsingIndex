@@ -7,6 +7,20 @@ import scala.collection.mutable.ListBuffer
 
 object Schema {
 
+  /**
+    * readSchemaAndCreateTable  reads the schema from dataframe and genearte the hive schema for hive tables
+    * and create hive table using that.
+    * @param spark
+    * @param indexTableName
+    * @param baseTableName
+    * @param tableLocation
+    * @param schemaFilePath
+    * @param partitionColumn
+    * @param primaryKeys
+    * @param dataFrame
+    * @param versionCol
+    * @return
+    */
   def readSchemaAndCreateTable(spark:SparkSession,indexTableName:String,baseTableName:String,tableLocation:String,
                                schemaFilePath:String,partitionColumn:String,primaryKeys:String,dataFrame:DataFrame,
                                versionCol:String)={
@@ -41,7 +55,11 @@ object Schema {
 
   }
 
-
+  /**
+    * dataTypeMapper returns the spark-sql-type dataType for hive related dataType.
+    * @param pattern
+    * @return
+    */
   def dataTypeMapper(pattern:String) = {
     pattern match {
       case "\"string\"" => StringType
@@ -49,6 +67,12 @@ object Schema {
     }
   }
 
+  /**
+    * createSchema reads the json schema and creates schema for dataframe of type StructType.
+    * @param spark
+    * @param schemaFilePath
+    * @return
+    */
   def createSchema(spark:SparkSession, schemaFilePath:String)={
 
     val listOfStructFields = new ListBuffer[StructField]

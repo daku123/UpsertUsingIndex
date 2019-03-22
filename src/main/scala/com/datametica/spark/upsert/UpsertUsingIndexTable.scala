@@ -4,7 +4,7 @@ import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.{DataFrame, SaveMode, SparkSession}
 import org.apache.spark.sql.functions._
 
-object BatchLoadUsingIndexTable{
+object UpsertUsingIndexTable{
 
   /**
     *  load function basically does some transformation on data and creates table if don't exist then push the data to

@@ -16,10 +16,14 @@ object MainClass {
     val schemaFilePath = args(7)
     val spark = getSparkSession()
 
-    BatchLoadUsingIndexTable.loadData(spark,inputFileLocation,"csv", tableLocation,
+    UpsertUsingIndexTable.loadData(spark,inputFileLocation,"csv", tableLocation,
       baseTableName,schemaFilePath,partitionCol,primaryKey,versionColName,indexTableName)
   }
 
+  /**
+    *  creates spark session and add some of the hive-properties to it.
+    * @return
+    */
   def getSparkSession(): SparkSession = {
     val spark = SparkSession.builder().appName("UsertUsingIndexTable")
       .enableHiveSupport().getOrCreate()
