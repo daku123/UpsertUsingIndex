@@ -45,9 +45,10 @@ object UpsertUsingIndexTable{
       )
     dataFrameWithVersion.write.mode(SaveMode.Append).insertInto(tableName)
 
+    val keys = this.seqOfKeys(key) :+ col(versionColName)
     val changeDataForIndexTable = dataFrameWithVersion
-      .selectExpr(
-        key,versionColName
+      .select(
+        keys:_*
       ).withColumn(
         "run_id",lit(TableQuery.getRunId(spark,indexTableName,"next").toString)
       )
@@ -77,6 +78,7 @@ object UpsertUsingIndexTable{
     */
   def getVersionNumber()= (System.currentTimeMillis()/1000).toString
 
+  def seqOfKeys(key:String) = key.split(",").toSeq.map(name => col(name))
   /**
     * generateNewDataForIndexTable -- it will generate new data for index table by performing union
     * with new coming data and latest data from index table.
@@ -91,9 +93,10 @@ object UpsertUsingIndexTable{
   def generateNewDataForIndexTable(spark:SparkSession,newSetOfData:DataFrame,latestDataFromIndexTable:DataFrame,key:String)={
     val unionOfDataFrame = newSetOfData.union(latestDataFromIndexTable)
     import spark.implicits._
-    val windowSpec = Window.partitionBy(key).orderBy('run_id desc)
+    val windowSpec = Window.partitionBy(this.seqOfKeys(key):_*).orderBy('run_id desc)
     unionOfDataFrame.withColumn("row_number",row_number().over(windowSpec)).filter("row_number==1").drop("row_number")
   }
+
 
 }
 
